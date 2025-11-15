@@ -1,0 +1,73 @@
+name: 'ty Action'
+description: 'Run ty type checker with GitHub annotations'
+author: 'Jacob Coffee'
+
+branding:
+  icon: 'check-circle'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Version of ty to install (default: latest)'
+    required: false
+    default: ''
+  args:
+    description: 'Arguments to pass to ty (e.g., "check src")'
+    required: false
+    default: 'check'
+  working-directory:
+    description: 'Working directory for ty'
+    required: false
+    default: '.'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        enable-cache: true
+
+    - name: Install ty
+      shell: bash
+      run: |
+        if [ -n "${{ inputs.version }}" ]; then
+          uvx ty@${{ inputs.version }} --version
+        else
+          uvx ty --version
+        fi
+
+    - name: Run ty
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set +e
+        if [ -n "${{ inputs.version }}" ]; then
+          uvx ty@${{ inputs.version }} ${{ inputs.args }} 2>&1 | tee ty-output.txt
+        else
+          uvx ty ${{ inputs.args }} 2>&1 | tee ty-output.txt
+        fi
+        exit_code=$?
+
+        # Parse ty output and create GitHub annotations
+        while IFS= read -r line; do
+          # Match error format: path/to/file.py:line:col: error message
+          if [[ $line =~ ^([^:]+):([0-9]+):([0-9]+):(.+)$ ]]; then
+            file="${BASH_REMATCH[1]}"
+            line_num="${BASH_REMATCH[2]}"
+            col="${BASH_REMATCH[3]}"
+            msg="${BASH_REMATCH[4]}"
+
+            # Determine severity
+            if [[ $msg =~ ^[[:space:]]*error ]]; then
+              echo "::error file=$file,line=$line_num,col=$col::$msg"
+            elif [[ $msg =~ ^[[:space:]]*warning ]]; then
+              echo "::warning file=$file,line=$line_num,col=$col::$msg"
+            else
+              echo "::notice file=$file,line=$line_num,col=$col::$msg"
+            fi
+          fi
+        done < ty-output.txt
+
+        rm -f ty-output.txt
+        exit $exit_code
